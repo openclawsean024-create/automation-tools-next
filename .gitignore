@@ -1,3 +1,7 @@
 telegram-token.txt
 *.ps1
 *.py
+.vercel
+node_modules/
+out/
+.next/
