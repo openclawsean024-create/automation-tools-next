@@ -144,7 +144,7 @@ function SkillCard({ skill }: { skill: Skill }) {
           </p>
         )}
         {/* Chinese description */}
-        {skill.descriptionZh && skill.descriptionZh !== skill.descriptionEn && (
+        {skill.descriptionZh && (
           <p className="text-xs text-zinc-500 line-clamp-2">
             <span className="text-zinc-600 font-mono mr-1">中:</span>{skill.descriptionZh}
           </p>

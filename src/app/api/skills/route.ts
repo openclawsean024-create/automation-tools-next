@@ -104,7 +104,7 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
 async function enrichDescriptions(skills: Skill[]): Promise<Skill[]> {
   return Promise.all(
     skills.map(async (skill) => {
-      if (skill.descriptionEn && !skill.descriptionZh) {
+      if (skill.descriptionEn && skill.descriptionEn === skill.descriptionZh) {
         skill.descriptionZh = await translateToZh(skill.descriptionEn);
       }
       return skill;
@@ -122,7 +122,8 @@ export async function GET(request: NextRequest) {
 
   const cached = cache[category];
   if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    return NextResponse.json({ skills: cached.data, cached: true });
+    const enriched = await enrichDescriptions(cached.data);
+    return NextResponse.json({ skills: enriched, cached: true });
   }
 
   let skills = await fetchSkillsFromAPI(category);
