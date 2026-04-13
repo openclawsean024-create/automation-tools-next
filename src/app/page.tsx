@@ -143,9 +143,10 @@ export default function SkillExplorerPage() {
   }, [activeCategory]);
 
   const filteredSkills = useMemo(() => {
-    if (!searchQuery.trim()) return skills;
+    const sorted = [...skills].sort((a, b) => b.score - a.score); // default: sort by stars descending
+    if (!searchQuery.trim()) return sorted;
     const q = searchQuery.toLowerCase();
-    return skills.filter(
+    return sorted.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
         s.slug.toLowerCase().includes(q)
