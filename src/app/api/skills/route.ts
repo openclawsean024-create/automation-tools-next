@@ -60,6 +60,23 @@ function resolveGitHubUrl(slug: string): string {
   return '';
 }
 
+async function translateToEn(text: string): Promise<string> {
+  if (!text || text.length < 2) return text;
+  try {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text.slice(0, 500))}&langpair=zh|en`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return text;
+    const data = await res.json();
+    const translated = data?.responseData?.translatedText;
+    if (translated && translated !== text && !translated.includes('MYMEMORY WARNING')) {
+      return translated;
+    }
+    return text;
+  } catch {
+    return text;
+  }
+}
+
 async function translateToZh(text: string): Promise<string> {
   if (!text || text.length < 2) return text;
   try {
@@ -68,7 +85,6 @@ async function translateToZh(text: string): Promise<string> {
     if (!res.ok) return text;
     const data = await res.json();
     const translated = data?.responseData?.translatedText;
-    // Return translated only if quality is decent
     if (translated && translated !== text && !translated.includes('MYMEMORY WARNING')) {
       return translated;
     }
@@ -76,6 +92,10 @@ async function translateToZh(text: string): Promise<string> {
   } catch {
     return text;
   }
+}
+
+function isChineseText(text: string): boolean {
+  return /[\u4e00-\u9fff]/.test(text);
 }
 
 async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
@@ -104,6 +124,12 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
 async function enrichDescriptions(skills: Skill[]): Promise<Skill[]> {
   return Promise.all(
     skills.map(async (skill) => {
+      // If descriptionEn looks like Chinese, translate it to English
+      if (skill.descriptionEn && isChineseText(skill.descriptionEn)) {
+        skill.descriptionEn = await translateToEn(skill.descriptionEn);
+      }
+      // If descriptionEn and descriptionZh are still the same (both English or both unchanged),
+      // translate descriptionZh to Chinese
       if (skill.descriptionEn && skill.descriptionEn === skill.descriptionZh) {
         skill.descriptionZh = await translateToZh(skill.descriptionEn);
       }
