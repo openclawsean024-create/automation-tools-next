@@ -155,31 +155,13 @@ export default function SkillExplorerPage() {
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      {/* Background gradient orbs */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-0 right-1/4 w-80 h-80 bg-purple-600/8 rounded-full blur-3xl" />
-      </div>
-
-      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-10">
+      <div className="max-w-6xl mx-auto px-4 py-6">
         {/* Header */}
-        <div className="text-center mb-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-medium mb-4">
-            <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-            </svg>
-            ClawHub Skill Explorer
-          </div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-white mb-3">
-            Discover{' '}
-            <span className="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
-              Agent Skills
-            </span>
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-white mb-1">
+            <span className="bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">Agent Skills</span>
           </h1>
-          <p className="text-zinc-400 text-sm max-w-md mx-auto">
-            Browse and search skills from ClawHub organized by category.
-            Powered by the CLI.
-          </p>
+          <p className="text-zinc-500 text-sm">Browse by category</p>
         </div>
 
         {/* Search */}
@@ -217,9 +199,7 @@ export default function SkillExplorerPage() {
         </div>
 
         {/* Category Tabs */}
-        <div className="flex gap-1.5 overflow-x-auto pb-2 mb-8
-          scrollbar-thin scrollbar-track-zinc-900 scrollbar-thumb-zinc-700
-          justify-center flex-wrap">
+        <div className="flex gap-1.5 overflow-x-auto pb-2 mb-6 flex-wrap">
           {CATEGORIES.map((cat) => (
             <button
               key={cat.id}
