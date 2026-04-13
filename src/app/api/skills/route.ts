@@ -4,6 +4,11 @@ interface Skill {
   slug: string;
   name: string;
   score: number;
+  descriptionEn: string;
+  descriptionZh: string;
+  channelStars: number;
+  category: string;
+  githubUrl: string;
 }
 
 // Simple in-memory cache: category -> { data: Skill[], timestamp: number }
@@ -36,7 +41,7 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
       headers: {
         'Accept': 'application/json',
       },
-      next: { revalidate: 300 }, // Next.js cache — 5 minutes
+      next: { revalidate: 300 },
     });
 
     if (!res.ok) {
@@ -50,6 +55,11 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
       slug: r.slug,
       name: r.displayName,
       score: r.score,
+      descriptionEn: r.summary || '',
+      descriptionZh: r.summary || '',
+      channelStars: 0,
+      category: category,
+      githubUrl: `https://clawhub.ai/${r.slug}`,
     }));
   } catch (error) {
     console.error('Failed to fetch from ClawHub API:', error);
