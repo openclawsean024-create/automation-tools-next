@@ -98,6 +98,35 @@ function isChineseText(text: string): boolean {
   return /[\u4e00-\u9fff]/.test(text);
 }
 
+// Hardcoded overrides for skills whose ClawHub summaries are Chinese or need correction.
+// descriptionEn must be English; descriptionZh must be Chinese.
+const SKILL_OVERRIDES: Record<string, { descriptionEn: string; descriptionZh: string }> = {
+  'ai-automation-consulting': {
+    descriptionEn:
+      'Get expert guidance on automating workflows with AI agents. Covers strategy, tool selection, prompt engineering, and integration patterns for production AI automation systems.',
+    descriptionZh:
+      '獲得 AI 自動化流程的專家指導。涵蓋策略規劃、工具選擇、提示詞工程，以及生產環境 AI 自動化系統的整合模式。',
+  },
+  'openclaw-automation-recipes': {
+    descriptionEn:
+      'A curated collection of ready-to-use automation recipes for OpenClaw. Includes step-by-step recipes for common workflows such as data extraction, scheduled reporting, and cross-tool integrations.',
+    descriptionZh:
+      '專為 OpenClaw 精選的自動化配方集合。包含常用工作流程的逐步配方，如資料擷取、排程報告生成及跨工具整合。',
+  },
+  'workflow-automation-cn': {
+    descriptionEn:
+      'Build and manage automated workflows without writing code. Drag-and-drop workflow builder with support for branching logic, loops, error handling, and 100+ app integrations.',
+    descriptionZh:
+      '無需編寫程式碼即可建立和管理自動化工作流程。支援分支邏輯、迴圈、錯誤處理及 100+ 應用程式整合的拖放式工作流程建構器。',
+  },
+  'office-automation-pro': {
+    descriptionEn:
+      'Automate repetitive office tasks including document processing, email management, spreadsheet operations, and calendar scheduling. Saves hours of manual work every week.',
+    descriptionZh:
+      '自動化處理繁瑣的辦公室任務，包括文件處理、電子郵件管理、試算表操作及行事曆排程。每週為您節省數小時的人工時間。',
+  },
+};
+
 async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
   const url = `https://clawhub.ai/api/v1/search?q=${encodeURIComponent(category)}&limit=30`;
   try {
@@ -124,12 +153,17 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
 async function enrichDescriptions(skills: Skill[]): Promise<Skill[]> {
   return Promise.all(
     skills.map(async (skill) => {
-      // If descriptionEn looks like Chinese, translate it to English
+      // Apply hardcoded overrides first — these are always correct
+      if (SKILL_OVERRIDES[skill.slug]) {
+        skill.descriptionEn = SKILL_OVERRIDES[skill.slug].descriptionEn;
+        skill.descriptionZh = SKILL_OVERRIDES[skill.slug].descriptionZh;
+        return skill;
+      }
+      // Fallback: try to fix Chinese descriptionEn via MyMemory
       if (skill.descriptionEn && isChineseText(skill.descriptionEn)) {
         skill.descriptionEn = await translateToEn(skill.descriptionEn);
       }
-      // If descriptionEn and descriptionZh are still the same (both English or both unchanged),
-      // translate descriptionZh to Chinese
+      // Ensure descriptionZh is in Chinese
       if (skill.descriptionEn && skill.descriptionEn === skill.descriptionZh) {
         skill.descriptionZh = await translateToZh(skill.descriptionEn);
       }
