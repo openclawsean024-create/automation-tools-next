@@ -5,3 +5,4 @@ telegram-token.txt
 node_modules/
 out/
 .next/
+tsconfig.tsbuildinfo
