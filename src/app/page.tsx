@@ -228,6 +228,9 @@ export default function SkillExplorerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
   const t = translations[lang];
 
   useEffect(() => {
@@ -246,6 +249,7 @@ export default function SkillExplorerPage() {
       })
       .then((data) => {
         setSkills(data.skills || []);
+        if (data.updatedAt) setLastUpdated(data.updatedAt);
         setLoading(false);
       })
       .catch((err) => {
@@ -253,6 +257,24 @@ export default function SkillExplorerPage() {
         setLoading(false);
       });
   }, [activeCategory]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetch('/api/skills/update-skills', { method: 'POST', headers: { 'Authorization': 'Bearer dev-secret' } });
+      const url = activeCategory === 'all'
+        ? '/api/skills?all=true'
+        : `/api/skills?category=${encodeURIComponent(activeCategory)}`;
+      const r = await fetch(url);
+      const d = await r.json();
+      setSkills(d.skills || []);
+      if (d.updatedAt) setLastUpdated(d.updatedAt);
+    } catch (e) {
+      console.error('Refresh failed:', e);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const filteredSkills = useMemo(() => {
     const sorted = [...skills].sort((a, b) => b.score - a.score);
@@ -275,21 +297,42 @@ export default function SkillExplorerPage() {
               <h1 className="text-2xl font-bold text-white mb-1">
                 {t.title}
               </h1>
-              <p className="text-zinc-500 text-sm">{t.subtitle}</p>
+              {lastUpdated && (
+                <p className="text-zinc-600 text-xs">
+                  {lang === 'zh' ? '更新時間：' : 'Updated: '}
+                  {new Date(lastUpdated).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}
+                </p>
+              )}
             </div>
-            {/* Language toggle */}
-            <button
-              onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-                bg-zinc-900 border border-zinc-800 text-zinc-400
-                hover:text-zinc-200 hover:border-zinc-700 transition-all"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                  d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
-              </svg>
-              {t.switchLang}
-            </button>
+            <div className="flex items-center gap-2">
+              {/* Refresh button */}
+              <button
+                onClick={handleRefresh}
+                disabled={refreshing}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                  bg-indigo-600 hover:bg-indigo-500 text-white
+                  disabled:opacity-50 disabled:cursor-not-allowed
+                  transition-all"
+              >
+                <svg className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {refreshing ? (lang === 'zh' ? '更新中…' : 'Refreshing…') : (lang === 'zh' ? '刷新' : 'Refresh')}
+              </button>
+              {/* Language toggle */}
+              <button
+                onClick={() => setLang(lang === 'en' ? 'zh' : 'en')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                  bg-zinc-900 border border-zinc-800 text-zinc-400
+                  hover:text-zinc-200 hover:border-zinc-700 transition-all"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                </svg>
+                {t.switchLang}
+              </button>
+            </div>
           </div>
 
           {/* Search */}

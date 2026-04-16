@@ -277,11 +277,11 @@ async function persistSkills(skills: Skill[]) {
 }
 
 // Read from /tmp cache
-async function readSkillsCache(): Promise<Skill[] | null> {
+async function readSkillsCache(): Promise<{ skills: Skill[]; updatedAt: number } | null> {
   try {
     const data = await readFile('/tmp/skills-data.json', 'utf-8');
     const parsed = JSON.parse(data);
-    return parsed.skills as Skill[];
+    return { skills: parsed.skills as Skill[], updatedAt: parsed.updatedAt as number };
   } catch {
     return null;
   }
@@ -294,59 +294,59 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const category = searchParams.get('category');
   const all = searchParams.get('all');
+  const now = Date.now();
 
-  // Return ALL skills collected via multi-term search
+  // Unified cache loader
+  const loadAllSkills = async (): Promise<{ skills: Skill[]; updatedAt: number } | null> => {
+    if (allSkillsCache && now - allSkillsCache.timestamp < ALL_SKILLS_CACHE_TTL) {
+      return { skills: allSkillsCache.data, updatedAt: allSkillsCache.timestamp };
+    }
+    const cached = await readSkillsCache();
+    if (cached && cached.skills.length > 0) {
+      allSkillsCache = { data: cached.skills, timestamp: now };
+      return cached;
+    }
+    return null;
+  };
+
+  // Return ALL skills
   if (all === 'true') {
-    const now = Date.now();
-
-    // 1. In-memory cache (warm invocation)
     if (allSkillsCache && now - allSkillsCache.timestamp < ALL_SKILLS_CACHE_TTL) {
       const enriched = await enrichDescriptions(allSkillsCache.data);
-      return NextResponse.json({ skills: enriched, cached: true, total: enriched.length });
+      return NextResponse.json({ skills: enriched, cached: true, total: enriched.length, updatedAt: allSkillsCache.timestamp });
     }
-
-    // 2. /tmp disk cache (persisted by cron)
-    try {
-      const cached = await readSkillsCache();
-      if (cached && cached.length > 0) {
-        allSkillsCache = { data: cached, timestamp: now };
-        const enriched = await enrichDescriptions(cached);
-        return NextResponse.json({ skills: enriched, cached: true, source: '/tmp', total: enriched.length });
-      }
-    } catch (e) {
-      console.warn('[skills] /tmp cache read failed:', e);
+    const cached = await readSkillsCache();
+    if (cached && cached.skills.length > 0) {
+      allSkillsCache = { data: cached.skills, timestamp: now };
+      const enriched = await enrichDescriptions(cached.skills);
+      return NextResponse.json({ skills: enriched, cached: true, source: '/tmp', total: enriched.length, updatedAt: cached.updatedAt });
     }
-
-    // 3. Fresh fetch (full multi-term pagination)
     let skills = await fetchAllSkills();
     skills = await enrichDescriptions(skills);
     allSkillsCache = { data: skills, timestamp: now };
-
-    // Persist to /tmp for next request
-    try {
-      await persistSkills(skills);
-    } catch (e) {
-      console.warn('[skills] Could not persist to /tmp:', e);
-    }
-
-    return NextResponse.json({ skills, cached: false, total: skills.length });
+    try { await persistSkills(skills); } catch (e) { console.warn('[skills] persist failed:', e); }
+    return NextResponse.json({ skills, cached: false, total: skills.length, updatedAt: now });
   }
 
-  // Category-specific (existing behavior)
+  // Category: load full dataset → filter (no 50-limit)
   if (!category || !CATEGORIES.includes(category)) {
     return NextResponse.json({ error: 'Invalid category' }, { status: 400 });
   }
 
-  const cached = cache[category];
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
-    const enriched = await enrichDescriptions(cached.data);
-    return NextResponse.json({ skills: enriched, cached: true });
+  const allData = await loadAllSkills();
+  if (allData) {
+    const filtered = allData.skills.filter(s => s.category === category);
+    const enriched = await enrichDescriptions(filtered);
+    return NextResponse.json({ skills: enriched, cached: true, total: enriched.length, updatedAt: allData.updatedAt });
   }
 
-  let skills = await fetchSkillsFromAPI(category);
+  // Fallback: fresh full fetch then filter
+  let skills = await fetchAllSkills();
   skills = await enrichDescriptions(skills);
-  cache[category] = { data: skills, timestamp: Date.now() };
-  return NextResponse.json({ skills, cached: false });
+  allSkillsCache = { data: skills, timestamp: now };
+  try { await persistSkills(skills); } catch (e) { console.warn('[skills] persist failed:', e); }
+  const filtered = skills.filter(s => s.category === category);
+  return NextResponse.json({ skills: filtered, cached: false, total: filtered.length, updatedAt: now });
 }
 
 // POST: manual trigger to refresh all skills
