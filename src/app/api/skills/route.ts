@@ -12,7 +12,6 @@ interface Skill {
   clawhubUrl: string;
 }
 
-// Known GitHub repo mappings for skills published via ClawHub
 const KNOWN_GITHUB_REPOS: Record<string, string> = {
   'agent-browser-clawdbot': 'https://github.com/MaTriXy/agent-browser-clawdbot',
   'agent-browser-cli': 'https://github.com/MaTriXy/agent-browser-clawdbot',
@@ -38,7 +37,6 @@ const CATEGORIES = [
   'data', 'social', 'finance', 'marketing', 'design',
 ];
 
-// Comprehensive search terms for full ClawHub coverage
 const SEARCH_TERMS = [
   'automation', 'productivity', 'web', 'ai', 'agent', 'browser',
   'code', 'development', 'data', 'social', 'marketing', 'design',
@@ -48,7 +46,7 @@ const SEARCH_TERMS = [
   'crypto', 'deploy', 'docker', 'security', 'nlp', 'slack',
   'shopify', 'salesforce', 'scrape', 'extract', 'workflow',
   'notification', 'schedule', 'report', 'analytics', 'monitor',
-  'test', 'debug', 'deploy', 'ci', 'cd', 'infrastructure',
+  'test', 'debug', 'ci', 'cd', 'infrastructure',
 ];
 
 interface ClawHubResult {
@@ -139,7 +137,7 @@ const SKILL_OVERRIDES: Record<string, { descriptionEn: string; descriptionZh: st
 };
 
 async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
-  const url = `https://clawhub.ai/api/v1/search?q=${encodeURIComponent(category)}&limit=30`;
+  const url = `https://clawhub.ai/api/v1/search?q=${encodeURIComponent(category)}&limit=50`;
   try {
     const res = await fetch(url, { next: { revalidate: 300 }, signal: AbortSignal.timeout(10000) });
     if (!res.ok) { console.error(`ClawHub API ${res.status}`); return []; }
@@ -161,37 +159,50 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
   }
 }
 
-// Fetch ALL skills using comprehensive multi-term search with deduplication
+// Fetch ALL skills using comprehensive multi-term search with cursor pagination
 async function fetchAllSkills(): Promise<Skill[]> {
   const seen = new Set<string>();
   const allSkills: Skill[] = [];
 
   for (const term of SEARCH_TERMS) {
-    try {
-      const url = `https://clawhub.ai/api/v1/search?q=${encodeURIComponent(term)}&limit=30`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-      if (!res.ok) continue;
-      const data: ClawHubResponse = await res.json();
-      for (const r of data.results || []) {
-        if (seen.has(r.slug)) continue;
-        seen.add(r.slug);
-        // Derive category from first keyword match
-        const category = CATEGORIES.find(c => term.includes(c)) || term;
-        allSkills.push({
-          slug: r.slug,
-          name: r.displayName,
-          score: r.score,
-          descriptionEn: r.summary || '',
-          descriptionZh: r.summary || '',
-          channelStars: 0,
-          category: category,
-          githubUrl: resolveGitHubUrl(r.slug),
-          clawhubUrl: `https://clawhub.ai/${r.slug}`,
-        });
+    let cursor: string | undefined;
+    const termSeen = new Set<string>();
+
+    do {
+      try {
+        const params = new URLSearchParams({ q: term, limit: '50' });
+        if (cursor) params.set('cursor', cursor);
+        const url = `https://clawhub.ai/api/v1/search?${params}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+        if (!res.ok) break;
+        const data: ClawHubResponse = await res.json();
+
+        for (const r of data.results || []) {
+          if (seen.has(r.slug)) continue;
+          if (termSeen.has(r.slug)) continue;
+          termSeen.add(r.slug);
+          seen.add(r.slug);
+          const category = CATEGORIES.find(c => term.includes(c)) || term;
+          allSkills.push({
+            slug: r.slug,
+            name: r.displayName,
+            score: r.score,
+            descriptionEn: r.summary || '',
+            descriptionZh: r.summary || '',
+            channelStars: 0,
+            category: category,
+            githubUrl: resolveGitHubUrl(r.slug),
+            clawhubUrl: `https://clawhub.ai/${r.slug}`,
+          });
+        }
+
+        cursor = data.nextCursor;
+        if (cursor) await new Promise(r => setTimeout(r, 100));
+      } catch (error) {
+        console.error(`Search failed for "${term}" (cursor=${cursor}):`, error);
+        break;
       }
-    } catch (error) {
-      console.error(`Search failed for "${term}":`, error);
-    }
+    } while (cursor);
   }
 
   return allSkills;
@@ -216,9 +227,7 @@ async function enrichDescriptions(skills: Skill[]): Promise<Skill[]> {
   );
 }
 
-// Static file path for cron-generated data
 import { writeFile, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
 
 async function persistSkills(skills: Skill[]) {
   const dir = process.cwd();
@@ -226,7 +235,6 @@ async function persistSkills(skills: Skill[]) {
   await writeFile(`${dir}/public/skills-data.json`, JSON.stringify({ skills, updatedAt: Date.now() }, null, 2));
 }
 
-// Cache for all-skills mode
 const ALL_SKILLS_CACHE_TTL = 5 * 60 * 1000;
 let allSkillsCache: { data: Skill[]; timestamp: number } | null = null;
 
@@ -242,7 +250,6 @@ export async function GET(request: NextRequest) {
       const enriched = await enrichDescriptions(allSkillsCache.data);
       return NextResponse.json({ skills: enriched, cached: true, total: enriched.length });
     }
-    // Try to read from static file
     try {
       const { readFile } = await import('fs/promises');
       const data = await readFile(`${process.cwd()}/public/skills-data.json`, 'utf-8');
@@ -252,7 +259,6 @@ export async function GET(request: NextRequest) {
       const enriched = await enrichDescriptions(skills);
       return NextResponse.json({ skills: enriched, cached: false, total: enriched.length });
     } catch {
-      // Fallback: fetch on demand
       let skills = await fetchAllSkills();
       skills = await enrichDescriptions(skills);
       allSkillsCache = { data: skills, timestamp: now };

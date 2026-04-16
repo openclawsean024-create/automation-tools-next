@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { writeFile, mkdir } from 'fs/promises';
 
 // Vercel Cron: runs at 00:00 UTC daily via GET request from Vercel's cron infrastructure.
 // Set CRON_SECRET env var on Vercel and add to vercel.json crons config.
@@ -37,6 +38,7 @@ const CATEGORIES = [
   'data', 'social', 'finance', 'marketing', 'design',
 ];
 
+// Comprehensive search terms to maximize coverage
 const SEARCH_TERMS = [
   'automation', 'productivity', 'web', 'ai', 'agent', 'browser',
   'code', 'development', 'data', 'social', 'marketing', 'design',
@@ -60,6 +62,7 @@ interface ClawHubResult {
 
 interface ClawHubResponse {
   results: ClawHubResult[];
+  nextCursor?: string;
 }
 
 function resolveGitHubUrl(slug: string): string {
@@ -70,21 +73,26 @@ function resolveGitHubUrl(slug: string): string {
   return '';
 }
 
-async function fetchAllSkills(): Promise<Skill[]> {
-  const seen = new Set<string>();
-  const allSkills: Skill[] = [];
+// Fetch all results for a single search term using cursor pagination
+async function fetchAllForTerm(term: string): Promise<Skill[]> {
+  const termSeen = new Set<string>();
+  const results: Skill[] = [];
+  let cursor: string | undefined;
 
-  for (const term of SEARCH_TERMS) {
+  do {
     try {
-      const url = `https://clawhub.ai/api/v1/search?q=${encodeURIComponent(term)}&limit=30`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
-      if (!res.ok) continue;
+      const params = new URLSearchParams({ q: term, limit: '50' });
+      if (cursor) params.set('cursor', cursor);
+      const url = `https://clawhub.ai/api/v1/search?${params}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!res.ok) break;
       const data: ClawHubResponse = await res.json();
+
       for (const r of data.results || []) {
-        if (seen.has(r.slug)) continue;
-        seen.add(r.slug);
+        if (termSeen.has(r.slug)) continue;
+        termSeen.add(r.slug);
         const category = CATEGORIES.find(c => term.includes(c)) || term;
-        allSkills.push({
+        results.push({
           slug: r.slug,
           name: r.displayName,
           score: r.score,
@@ -96,15 +104,41 @@ async function fetchAllSkills(): Promise<Skill[]> {
           clawhubUrl: `https://clawhub.ai/${r.slug}`,
         });
       }
+
+      cursor = data.nextCursor;
+      if (cursor) await new Promise(r => setTimeout(r, 150));
     } catch (error) {
-      console.error(`Search failed for "${term}":`, error);
+      console.error(`Search failed for "${term}" (cursor=${cursor}):`, error);
+      break;
     }
+  } while (cursor);
+
+  return results;
+}
+
+// Fetch ALL skills from ClawHub using comprehensive multi-term search + pagination
+async function fetchAllSkills(): Promise<Skill[]> {
+  const seen = new Set<string>();
+  const allSkills: Skill[] = [];
+
+  for (const term of SEARCH_TERMS) {
+    console.log(`[cron] Searching: "${term}"`);
+    const termResults = await fetchAllForTerm(term);
+
+    for (const skill of termResults) {
+      if (!seen.has(skill.slug)) {
+        seen.add(skill.slug);
+        allSkills.push(skill);
+      }
+    }
+    console.log(`[cron] "${term}" → +${termResults.length} skills (total unique: ${allSkills.length})`);
+
+    // Small delay between terms to be respectful of the API
+    await new Promise(r => setTimeout(r, 200));
   }
 
   return allSkills;
 }
-
-import { writeFile, mkdir } from 'fs/promises';
 
 async function persistSkills(skills: Skill[]): Promise<void> {
   const dir = process.cwd();
@@ -116,14 +150,12 @@ async function persistSkills(skills: Skill[]): Promise<void> {
 }
 
 export async function GET(request: NextRequest) {
-  // Verify this is a legitimate Vercel cron request
-  // Vercel sends: { cronitor: 'v0' } header for cron requests
-  const isCronRequest = request.headers.get('vercel') === 'v0' ||
+  const isCronRequest =
+    request.headers.get('vercel') === 'v0' ||
     request.headers.get('x-vercel-cron') === 'v0' ||
     process.env.VERCEL === '1';
 
   if (!isCronRequest && process.env.NODE_ENV === 'production') {
-    // In production, only allow Vercel cron or authorized requests
     const authHeader = request.headers.get('authorization');
     const cronSecret = process.env.CRON_SECRET;
     if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
@@ -132,10 +164,10 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    console.log('[cron] Starting skills data update...');
+    console.log('[cron] Starting full skills data update (all results, paginated)...');
     const skills = await fetchAllSkills();
     await persistSkills(skills);
-    console.log(`[cron] Updated skills-data.json with ${skills.length} skills`);
+    console.log(`[cron] Updated skills-data.json with ${skills.length} unique skills`);
     return NextResponse.json({
       success: true,
       total: skills.length,
