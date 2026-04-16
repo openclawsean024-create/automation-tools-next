@@ -61,6 +61,7 @@ interface Skill {
 }
 
 const CATEGORIES = [
+  { id: 'all', label: { en: '🌐 All Skills', zh: '🌐 全部技能' } },
   { id: 'automation', label: { en: '⚡ Automation', zh: '⚡ 自動化' } },
   { id: 'productivity', label: { en: '🚀 Productivity', zh: '🚀 生產力' } },
   { id: 'web', label: { en: '🌐 Web', zh: '🌐 網頁' } },
@@ -234,7 +235,11 @@ export default function SkillExplorerPage() {
     setError(null);
     setSkills([]);
 
-    fetch(`/api/skills?category=${encodeURIComponent(activeCategory)}`)
+    const url = activeCategory === 'all'
+      ? '/api/skills?all=true'
+      : `/api/skills?category=${encodeURIComponent(activeCategory)}`;
+
+    fetch(url)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();

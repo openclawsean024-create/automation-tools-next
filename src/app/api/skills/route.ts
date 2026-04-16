@@ -137,26 +137,44 @@ const SKILL_OVERRIDES: Record<string, { descriptionEn: string; descriptionZh: st
 };
 
 async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
-  const url = `https://clawhub.ai/api/v1/search?q=${encodeURIComponent(category)}&limit=50`;
-  try {
-    const res = await fetch(url, { next: { revalidate: 300 }, signal: AbortSignal.timeout(10000) });
-    if (!res.ok) { console.error(`ClawHub API ${res.status}`); return []; }
-    const data: ClawHubResponse = await res.json();
-    return (data.results || []).map((r) => ({
-      slug: r.slug,
-      name: r.displayName,
-      score: r.score,
-      descriptionEn: r.summary || '',
-      descriptionZh: r.summary || '',
-      channelStars: 0,
-      category: category,
-      githubUrl: resolveGitHubUrl(r.slug),
-      clawhubUrl: `https://clawhub.ai/${r.slug}`,
-    }));
-  } catch (error) {
-    console.error('ClawHub API failed:', error);
-    return [];
-  }
+  const seen = new Set<string>();
+  const allSkills: Skill[] = [];
+  let cursor: string | undefined;
+
+  do {
+    try {
+      const params = new URLSearchParams({ q: category, limit: '50' });
+      if (cursor) params.set('cursor', cursor);
+      const url = `https://clawhub.ai/api/v1/search?${params}`;
+      const res = await fetch(url, { next: { revalidate: 300 }, signal: AbortSignal.timeout(10000) });
+      if (!res.ok) { console.error(`ClawHub API ${res.status}`); break; }
+      const data: ClawHubResponse = await res.json();
+
+      for (const r of data.results || []) {
+        if (seen.has(r.slug)) continue;
+        seen.add(r.slug);
+        allSkills.push({
+          slug: r.slug,
+          name: r.displayName,
+          score: r.score,
+          descriptionEn: r.summary || '',
+          descriptionZh: r.summary || '',
+          channelStars: 0,
+          category: category,
+          githubUrl: resolveGitHubUrl(r.slug),
+          clawhubUrl: `https://clawhub.ai/${r.slug}`,
+        });
+      }
+
+      cursor = data.nextCursor;
+      if (cursor) await new Promise(r => setTimeout(r, 100));
+    } catch (error) {
+      console.error('ClawHub API failed:', error);
+      break;
+    }
+  } while (cursor);
+
+  return allSkills;
 }
 
 // Fetch ALL skills using comprehensive multi-term search with cursor pagination
