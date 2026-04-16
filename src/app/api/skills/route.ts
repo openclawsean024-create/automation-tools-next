@@ -38,6 +38,19 @@ const CATEGORIES = [
   'data', 'social', 'finance', 'marketing', 'design',
 ];
 
+// Comprehensive search terms for full ClawHub coverage
+const SEARCH_TERMS = [
+  'automation', 'productivity', 'web', 'ai', 'agent', 'browser',
+  'code', 'development', 'data', 'social', 'marketing', 'design',
+  'twitter', 'github', 'email', 'notion', 'database', 'api',
+  'claude', 'openai', 'image', 'video', 'audio', 'writing',
+  'finance', 'health', 'travel', 'food', 'education', 'game',
+  'crypto', 'deploy', 'docker', 'security', 'nlp', 'slack',
+  'shopify', 'salesforce', 'scrape', 'extract', 'workflow',
+  'notification', 'schedule', 'report', 'analytics', 'monitor',
+  'test', 'debug', 'deploy', 'ci', 'cd', 'infrastructure',
+];
+
 interface ClawHubResult {
   score: number;
   slug: string;
@@ -49,11 +62,11 @@ interface ClawHubResult {
 
 interface ClawHubResponse {
   results: ClawHubResult[];
+  nextCursor?: string;
 }
 
 function resolveGitHubUrl(slug: string): string {
   if (KNOWN_GITHUB_REPOS[slug]) return KNOWN_GITHUB_REPOS[slug];
-  // Try to derive from slug if it looks like a path
   if (slug.includes('-') && !slug.includes('/')) {
     return `https://github.com/${slug}`;
   }
@@ -98,8 +111,6 @@ function isChineseText(text: string): boolean {
   return /[\u4e00-\u9fff]/.test(text);
 }
 
-// Hardcoded overrides for skills whose ClawHub summaries are Chinese or need correction.
-// descriptionEn must be English; descriptionZh must be Chinese.
 const SKILL_OVERRIDES: Record<string, { descriptionEn: string; descriptionZh: string }> = {
   'ai-automation-consulting': {
     descriptionEn:
@@ -150,20 +161,53 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
   }
 }
 
+// Fetch ALL skills using comprehensive multi-term search with deduplication
+async function fetchAllSkills(): Promise<Skill[]> {
+  const seen = new Set<string>();
+  const allSkills: Skill[] = [];
+
+  for (const term of SEARCH_TERMS) {
+    try {
+      const url = `https://clawhub.ai/api/v1/search?q=${encodeURIComponent(term)}&limit=30`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) continue;
+      const data: ClawHubResponse = await res.json();
+      for (const r of data.results || []) {
+        if (seen.has(r.slug)) continue;
+        seen.add(r.slug);
+        // Derive category from first keyword match
+        const category = CATEGORIES.find(c => term.includes(c)) || term;
+        allSkills.push({
+          slug: r.slug,
+          name: r.displayName,
+          score: r.score,
+          descriptionEn: r.summary || '',
+          descriptionZh: r.summary || '',
+          channelStars: 0,
+          category: category,
+          githubUrl: resolveGitHubUrl(r.slug),
+          clawhubUrl: `https://clawhub.ai/${r.slug}`,
+        });
+      }
+    } catch (error) {
+      console.error(`Search failed for "${term}":`, error);
+    }
+  }
+
+  return allSkills;
+}
+
 async function enrichDescriptions(skills: Skill[]): Promise<Skill[]> {
   return Promise.all(
     skills.map(async (skill) => {
-      // Apply hardcoded overrides first — these are always correct
       if (SKILL_OVERRIDES[skill.slug]) {
         skill.descriptionEn = SKILL_OVERRIDES[skill.slug].descriptionEn;
         skill.descriptionZh = SKILL_OVERRIDES[skill.slug].descriptionZh;
         return skill;
       }
-      // Fallback: try to fix Chinese descriptionEn via MyMemory
       if (skill.descriptionEn && isChineseText(skill.descriptionEn)) {
         skill.descriptionEn = await translateToEn(skill.descriptionEn);
       }
-      // Ensure descriptionZh is in Chinese
       if (skill.descriptionEn && skill.descriptionEn === skill.descriptionZh) {
         skill.descriptionZh = await translateToZh(skill.descriptionEn);
       }
@@ -172,11 +216,52 @@ async function enrichDescriptions(skills: Skill[]): Promise<Skill[]> {
   );
 }
 
+// Static file path for cron-generated data
+import { writeFile, mkdir } from 'fs/promises';
+import { existsSync } from 'fs';
+
+async function persistSkills(skills: Skill[]) {
+  const dir = process.cwd();
+  await mkdir(`${dir}/public`, { recursive: true });
+  await writeFile(`${dir}/public/skills-data.json`, JSON.stringify({ skills, updatedAt: Date.now() }, null, 2));
+}
+
+// Cache for all-skills mode
+const ALL_SKILLS_CACHE_TTL = 5 * 60 * 1000;
+let allSkillsCache: { data: Skill[]; timestamp: number } | null = null;
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const category = searchParams.get('category') || 'automation';
+  const category = searchParams.get('category');
+  const all = searchParams.get('all');
 
-  if (!CATEGORIES.includes(category)) {
+  // Return all collected skills (for cron-built static file)
+  if (all === 'true') {
+    const now = Date.now();
+    if (allSkillsCache && now - allSkillsCache.timestamp < ALL_SKILLS_CACHE_TTL) {
+      const enriched = await enrichDescriptions(allSkillsCache.data);
+      return NextResponse.json({ skills: enriched, cached: true, total: enriched.length });
+    }
+    // Try to read from static file
+    try {
+      const { readFile } = await import('fs/promises');
+      const data = await readFile(`${process.cwd()}/public/skills-data.json`, 'utf-8');
+      const parsed = JSON.parse(data);
+      const skills = parsed.skills as Skill[];
+      allSkillsCache = { data: skills, timestamp: now };
+      const enriched = await enrichDescriptions(skills);
+      return NextResponse.json({ skills: enriched, cached: false, total: enriched.length });
+    } catch {
+      // Fallback: fetch on demand
+      let skills = await fetchAllSkills();
+      skills = await enrichDescriptions(skills);
+      allSkillsCache = { data: skills, timestamp: now };
+      return NextResponse.json({ skills, cached: false, total: skills.length });
+    }
+  }
+
+  // Category-specific (existing behavior)
+  if (!category || !CATEGORIES.includes(category)) {
     return NextResponse.json({ error: 'Invalid category' }, { status: 400 });
   }
 
@@ -188,7 +273,24 @@ export async function GET(request: NextRequest) {
 
   let skills = await fetchSkillsFromAPI(category);
   skills = await enrichDescriptions(skills);
-
   cache[category] = { data: skills, timestamp: Date.now() };
   return NextResponse.json({ skills, cached: false });
+}
+
+// Cron endpoint: /api/cron/update-skills
+export async function POST(request: NextRequest) {
+  const authHeader = request.headers.get('authorization');
+  const cronSecret = process.env.CRON_SECRET || 'dev-secret';
+  if (authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    const skills = await fetchAllSkills();
+    await persistSkills(skills);
+    return NextResponse.json({ success: true, total: skills.length, updatedAt: Date.now() });
+  } catch (error) {
+    console.error('Cron update failed:', error);
+    return NextResponse.json({ error: 'Update failed' }, { status: 500 });
+  }
 }
