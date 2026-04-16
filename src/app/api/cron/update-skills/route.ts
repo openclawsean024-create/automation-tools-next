@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir } from 'fs/promises';
-
-// Vercel Cron: runs at 00:00 UTC daily via GET request from Vercel's cron infrastructure.
-// Set CRON_SECRET env var on Vercel and add to vercel.json crons config.
+import { writeFile, mkdir, readFile } from 'fs/promises';
 
 interface Skill {
   slug: string;
@@ -38,7 +35,6 @@ const CATEGORIES = [
   'data', 'social', 'finance', 'marketing', 'design',
 ];
 
-// Comprehensive search terms to maximize coverage
 const SEARCH_TERMS = [
   'automation', 'productivity', 'web', 'ai', 'agent', 'browser',
   'code', 'development', 'data', 'social', 'marketing', 'design',
@@ -73,11 +69,12 @@ function resolveGitHubUrl(slug: string): string {
   return '';
 }
 
-// Fetch all results for a single search term using cursor pagination
+// Fetch all results for a single search term using full cursor pagination
 async function fetchAllForTerm(term: string): Promise<Skill[]> {
   const termSeen = new Set<string>();
   const results: Skill[] = [];
   let cursor: string | undefined;
+  let pageCount = 0;
 
   do {
     try {
@@ -85,8 +82,14 @@ async function fetchAllForTerm(term: string): Promise<Skill[]> {
       if (cursor) params.set('cursor', cursor);
       const url = `https://clawhub.ai/api/v1/search?${params}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-      if (!res.ok) break;
+
+      if (!res.ok) {
+        console.error(`[cron] ClawHub API error for "${term}" cursor=${cursor}: ${res.status}`);
+        break;
+      }
+
       const data: ClawHubResponse = await res.json();
+      pageCount++;
 
       for (const r of data.results || []) {
         if (termSeen.has(r.slug)) continue;
@@ -106,52 +109,66 @@ async function fetchAllForTerm(term: string): Promise<Skill[]> {
       }
 
       cursor = data.nextCursor;
-      if (cursor) await new Promise(r => setTimeout(r, 150));
+      if (cursor) {
+        await new Promise(r => setTimeout(r, 150));
+      }
     } catch (error) {
-      console.error(`Search failed for "${term}" (cursor=${cursor}):`, error);
+      console.error(`[cron] Search failed for "${term}" (cursor=${cursor}):`, error);
       break;
     }
   } while (cursor);
 
+  console.log(`[cron] "${term}" → ${results.length} skills in ${pageCount} page(s)`);
   return results;
 }
 
-// Fetch ALL skills from ClawHub using comprehensive multi-term search + pagination
+// Fetch ALL skills from ClawHub using comprehensive multi-term search + full cursor pagination
 async function fetchAllSkills(): Promise<Skill[]> {
   const seen = new Set<string>();
   const allSkills: Skill[] = [];
 
   for (const term of SEARCH_TERMS) {
-    console.log(`[cron] Searching: "${term}"`);
     const termResults = await fetchAllForTerm(term);
-
+    let newCount = 0;
     for (const skill of termResults) {
       if (!seen.has(skill.slug)) {
         seen.add(skill.slug);
         allSkills.push(skill);
+        newCount++;
       }
     }
-    console.log(`[cron] "${term}" → +${termResults.length} skills (total unique: ${allSkills.length})`);
-
-    // Small delay between terms to be respectful of the API
+    console.log(`[cron] "${term}" → +${newCount} new (total unique: ${allSkills.length})`);
     await new Promise(r => setTimeout(r, 200));
   }
 
   return allSkills;
 }
 
+// Write to /tmp which is writable in Vercel serverless
 async function persistSkills(skills: Skill[]): Promise<void> {
-  const dir = process.cwd();
-  await mkdir(`${dir}/public`, { recursive: true });
+  const tmpDir = '/tmp';
+  await mkdir(tmpDir, { recursive: true });
   await writeFile(
-    `${dir}/public/skills-data.json`,
+    `${tmpDir}/skills-data.json`,
     JSON.stringify({ skills, updatedAt: Date.now() }, null, 2)
   );
 }
 
+// Read from /tmp cache (for in-memory sharing between warm invocations)
+async function readSkillsCache(): Promise<Skill[] | null> {
+  try {
+    const data = await readFile('/tmp/skills-data.json', 'utf-8');
+    const parsed = JSON.parse(data);
+    return parsed.skills as Skill[];
+  } catch {
+    return null;
+  }
+}
+
+// Vercel Cron: runs at 00:00 UTC daily via GET request
 export async function GET(request: NextRequest) {
+  // Auth check: only for non-cron requests in production
   const isCronRequest =
-    request.headers.get('vercel') === 'v0' ||
     request.headers.get('x-vercel-cron') === 'v0' ||
     process.env.VERCEL === '1';
 
@@ -166,8 +183,16 @@ export async function GET(request: NextRequest) {
   try {
     console.log('[cron] Starting full skills data update (all results, paginated)...');
     const skills = await fetchAllSkills();
-    await persistSkills(skills);
-    console.log(`[cron] Updated skills-data.json with ${skills.length} unique skills`);
+
+    // Try to persist to /tmp for potential warm-invocation sharing
+    try {
+      await persistSkills(skills);
+      console.log(`[cron] Persisted ${skills.length} skills to /tmp`);
+    } catch (persistErr) {
+      console.warn('[cron] Could not persist to /tmp:', persistErr);
+    }
+
+    console.log(`[cron] Total unique skills collected: ${skills.length}`);
     return NextResponse.json({
       success: true,
       total: skills.length,
@@ -175,6 +200,30 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error('[cron] Update failed:', error);
-    return NextResponse.json({ error: 'Update failed' }, { status: 500 });
+    return NextResponse.json({ error: 'Update failed', detail: String(error) }, { status: 500 });
+  }
+}
+
+// Manual trigger via POST (for development / manual updates)
+export async function POST(request: NextRequest) {
+  const authHeader = request.headers.get('authorization');
+  const cronSecret = process.env.CRON_SECRET || 'dev-secret';
+  if (authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  try {
+    console.log('[cron] POST: Starting full skills data update...');
+    const skills = await fetchAllSkills();
+    try {
+      await persistSkills(skills);
+    } catch (persistErr) {
+      console.warn('[cron] POST: Could not persist to /tmp:', persistErr);
+    }
+    console.log(`[cron] POST: Total unique skills: ${skills.length}`);
+    return NextResponse.json({ success: true, total: skills.length, updatedAt: Date.now() });
+  } catch (error) {
+    console.error('[cron] POST update failed:', error);
+    return NextResponse.json({ error: 'Update failed', detail: String(error) }, { status: 500 });
   }
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { writeFile, mkdir, readFile } from 'fs/promises';
 
 interface Skill {
   slug: string;
@@ -140,15 +141,17 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
   const seen = new Set<string>();
   const allSkills: Skill[] = [];
   let cursor: string | undefined;
+  let pageCount = 0;
 
   do {
     try {
       const params = new URLSearchParams({ q: category, limit: '50' });
       if (cursor) params.set('cursor', cursor);
       const url = `https://clawhub.ai/api/v1/search?${params}`;
-      const res = await fetch(url, { next: { revalidate: 300 }, signal: AbortSignal.timeout(10000) });
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
       if (!res.ok) { console.error(`ClawHub API ${res.status}`); break; }
       const data: ClawHubResponse = await res.json();
+      pageCount++;
 
       for (const r of data.results || []) {
         if (seen.has(r.slug)) continue;
@@ -174,10 +177,11 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
     }
   } while (cursor);
 
+  console.log(`[skills] category="${category}" → ${allSkills.length} skills in ${pageCount} page(s)`);
   return allSkills;
 }
 
-// Fetch ALL skills using comprehensive multi-term search with cursor pagination
+// Fetch ALL skills using comprehensive multi-term search with full cursor pagination
 async function fetchAllSkills(): Promise<Skill[]> {
   const seen = new Set<string>();
   const allSkills: Skill[] = [];
@@ -185,6 +189,7 @@ async function fetchAllSkills(): Promise<Skill[]> {
   for (const term of SEARCH_TERMS) {
     let cursor: string | undefined;
     const termSeen = new Set<string>();
+    let pageCount = 0;
 
     do {
       try {
@@ -194,6 +199,7 @@ async function fetchAllSkills(): Promise<Skill[]> {
         const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
         if (!res.ok) break;
         const data: ClawHubResponse = await res.json();
+        pageCount++;
 
         for (const r of data.results || []) {
           if (seen.has(r.slug)) continue;
@@ -221,6 +227,9 @@ async function fetchAllSkills(): Promise<Skill[]> {
         break;
       }
     } while (cursor);
+
+    console.log(`[skills] term="${term}" → ${termSeen.size} unique in ${pageCount} page(s) (total: ${allSkills.length})`);
+    await new Promise(r => setTimeout(r, 150));
   }
 
   return allSkills;
@@ -245,12 +254,22 @@ async function enrichDescriptions(skills: Skill[]): Promise<Skill[]> {
   );
 }
 
-import { writeFile, mkdir } from 'fs/promises';
-
+// Write to /tmp (writable in Vercel serverless)
 async function persistSkills(skills: Skill[]) {
-  const dir = process.cwd();
-  await mkdir(`${dir}/public`, { recursive: true });
-  await writeFile(`${dir}/public/skills-data.json`, JSON.stringify({ skills, updatedAt: Date.now() }, null, 2));
+  const tmpDir = '/tmp';
+  await mkdir(tmpDir, { recursive: true });
+  await writeFile(`${tmpDir}/skills-data.json`, JSON.stringify({ skills, updatedAt: Date.now() }, null, 2));
+}
+
+// Read from /tmp cache
+async function readSkillsCache(): Promise<Skill[] | null> {
+  try {
+    const data = await readFile('/tmp/skills-data.json', 'utf-8');
+    const parsed = JSON.parse(data);
+    return parsed.skills as Skill[];
+  } catch {
+    return null;
+  }
 }
 
 const ALL_SKILLS_CACHE_TTL = 5 * 60 * 1000;
@@ -261,27 +280,41 @@ export async function GET(request: NextRequest) {
   const category = searchParams.get('category');
   const all = searchParams.get('all');
 
-  // Return all collected skills (for cron-built static file)
+  // Return ALL skills collected via multi-term search
   if (all === 'true') {
     const now = Date.now();
+
+    // 1. In-memory cache (warm invocation)
     if (allSkillsCache && now - allSkillsCache.timestamp < ALL_SKILLS_CACHE_TTL) {
       const enriched = await enrichDescriptions(allSkillsCache.data);
       return NextResponse.json({ skills: enriched, cached: true, total: enriched.length });
     }
+
+    // 2. /tmp disk cache (persisted by cron)
     try {
-      const { readFile } = await import('fs/promises');
-      const data = await readFile(`${process.cwd()}/public/skills-data.json`, 'utf-8');
-      const parsed = JSON.parse(data);
-      const skills = parsed.skills as Skill[];
-      allSkillsCache = { data: skills, timestamp: now };
-      const enriched = await enrichDescriptions(skills);
-      return NextResponse.json({ skills: enriched, cached: false, total: enriched.length });
-    } catch {
-      let skills = await fetchAllSkills();
-      skills = await enrichDescriptions(skills);
-      allSkillsCache = { data: skills, timestamp: now };
-      return NextResponse.json({ skills, cached: false, total: skills.length });
+      const cached = await readSkillsCache();
+      if (cached && cached.length > 0) {
+        allSkillsCache = { data: cached, timestamp: now };
+        const enriched = await enrichDescriptions(cached);
+        return NextResponse.json({ skills: enriched, cached: true, source: '/tmp', total: enriched.length });
+      }
+    } catch (e) {
+      console.warn('[skills] /tmp cache read failed:', e);
     }
+
+    // 3. Fresh fetch (full multi-term pagination)
+    let skills = await fetchAllSkills();
+    skills = await enrichDescriptions(skills);
+    allSkillsCache = { data: skills, timestamp: now };
+
+    // Persist to /tmp for next request
+    try {
+      await persistSkills(skills);
+    } catch (e) {
+      console.warn('[skills] Could not persist to /tmp:', e);
+    }
+
+    return NextResponse.json({ skills, cached: false, total: skills.length });
   }
 
   // Category-specific (existing behavior)
@@ -301,7 +334,7 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ skills, cached: false });
 }
 
-// Cron endpoint: /api/cron/update-skills
+// POST: manual trigger to refresh all skills
 export async function POST(request: NextRequest) {
   const authHeader = request.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET || 'dev-secret';
@@ -311,10 +344,14 @@ export async function POST(request: NextRequest) {
 
   try {
     const skills = await fetchAllSkills();
-    await persistSkills(skills);
+    try {
+      await persistSkills(skills);
+    } catch (e) {
+      console.warn('[skills] POST persist failed:', e);
+    }
     return NextResponse.json({ success: true, total: skills.length, updatedAt: Date.now() });
   } catch (error) {
-    console.error('Cron update failed:', error);
-    return NextResponse.json({ error: 'Update failed' }, { status: 500 });
+    console.error('Skills update failed:', error);
+    return NextResponse.json({ error: 'Update failed', detail: String(error) }, { status: 500 });
   }
 }
