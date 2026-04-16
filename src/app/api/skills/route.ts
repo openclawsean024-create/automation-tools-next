@@ -185,11 +185,13 @@ async function fetchSkillsFromAPI(category: string): Promise<Skill[]> {
 async function fetchAllSkills(): Promise<Skill[]> {
   const seen = new Set<string>();
   const allSkills: Skill[] = [];
+  let totalPages = 0;
 
   for (const term of SEARCH_TERMS) {
     let cursor: string | undefined;
     const termSeen = new Set<string>();
     let pageCount = 0;
+    let termErrorCount = 0;
 
     do {
       try {
@@ -197,11 +199,21 @@ async function fetchAllSkills(): Promise<Skill[]> {
         if (cursor) params.set('cursor', cursor);
         const url = `https://clawhub.ai/api/v1/search?${params}`;
         const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-        if (!res.ok) break;
+        if (!res.ok) {
+          console.error(`[skills] HTTP ${res.status} for term="${term}" cursor=${cursor}`);
+          termErrorCount++;
+          if (termErrorCount >= 3) { console.error('[skills] Too many errors, breaking'); break; }
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
         const data: ClawHubResponse = await res.json();
         pageCount++;
+        totalPages++;
 
-        for (const r of data.results || []) {
+        const results = data.results || [];
+        console.log(`[skills] term="${term}" page=${pageCount} cursor=${cursor || 'none'} → ${results.length} results nextCursor=${data.nextCursor || 'none'}`);
+
+        for (const r of results) {
           if (seen.has(r.slug)) continue;
           if (termSeen.has(r.slug)) continue;
           termSeen.add(r.slug);
@@ -220,11 +232,13 @@ async function fetchAllSkills(): Promise<Skill[]> {
           });
         }
 
-        cursor = data.nextCursor;
-        if (cursor) await new Promise(r => setTimeout(r, 100));
+        cursor = data.nextCursor ?? undefined;
+        if (cursor) await new Promise(r => setTimeout(r, 150));
       } catch (error) {
-        console.error(`Search failed for "${term}" (cursor=${cursor}):`, error);
-        break;
+        console.error(`[skills] Error for term="${term}" cursor=${cursor}:`, error);
+        termErrorCount++;
+        if (termErrorCount >= 3) break;
+        await new Promise(r => setTimeout(r, 2000));
       }
     } while (cursor);
 
@@ -232,6 +246,7 @@ async function fetchAllSkills(): Promise<Skill[]> {
     await new Promise(r => setTimeout(r, 150));
   }
 
+  console.log(`[skills] TOTAL: ${allSkills.length} unique skills from ${totalPages} pages across ${SEARCH_TERMS.length} terms`);
   return allSkills;
 }
 

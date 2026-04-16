@@ -75,6 +75,7 @@ async function fetchAllForTerm(term: string): Promise<Skill[]> {
   const results: Skill[] = [];
   let cursor: string | undefined;
   let pageCount = 0;
+  let errorCount = 0;
 
   do {
     try {
@@ -84,14 +85,19 @@ async function fetchAllForTerm(term: string): Promise<Skill[]> {
       const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
 
       if (!res.ok) {
-        console.error(`[cron] ClawHub API error for "${term}" cursor=${cursor}: ${res.status}`);
-        break;
+        console.error(`[cron] HTTP ${res.status} for term="${term}" cursor=${cursor || 'none'}`);
+        errorCount++;
+        if (errorCount >= 3) { console.error(`[cron] Too many errors for "${term}", breaking`); break; }
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
       }
 
       const data: ClawHubResponse = await res.json();
       pageCount++;
+      const resultsThisPage = data.results || [];
+      console.log(`[cron] term="${term}" page=${pageCount} cursor=${cursor || 'none'} → ${resultsThisPage.length} results nextCursor=${data.nextCursor || 'none'}`);
 
-      for (const r of data.results || []) {
+      for (const r of resultsThisPage) {
         if (termSeen.has(r.slug)) continue;
         termSeen.add(r.slug);
         const category = CATEGORIES.find(c => term.includes(c)) || term;
@@ -108,17 +114,19 @@ async function fetchAllForTerm(term: string): Promise<Skill[]> {
         });
       }
 
-      cursor = data.nextCursor;
+      cursor = data.nextCursor ?? undefined;
       if (cursor) {
         await new Promise(r => setTimeout(r, 150));
       }
     } catch (error) {
-      console.error(`[cron] Search failed for "${term}" (cursor=${cursor}):`, error);
-      break;
+      console.error(`[cron] Error for term="${term}" cursor=${cursor || 'none'}:`, error);
+      errorCount++;
+      if (errorCount >= 3) break;
+      await new Promise(r => setTimeout(r, 2000));
     }
   } while (cursor);
 
-  console.log(`[cron] "${term}" → ${results.length} skills in ${pageCount} page(s)`);
+  console.log(`[cron] term="${term}" → ${results.length} skills in ${pageCount} page(s)`);
   return results;
 }
 
