@@ -5,14 +5,17 @@
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=Space+Grotesk:wght@400;500;700&display=swap');
 
 :root {
-  --primary: #0F172A;
-  --secondary: #1E293B;
-  --accent: #6366F1;
-  --accent2: #F97316;
-  --text-light: #F8FAFC;
-  --text-muted: #94A3B8;
-  --border: #334155;
+  --bg: #111827;
+  --surface: #1F2937;
+  --surface-2: #374151;
+  --border: #374151;
+  --primary: #6366F1;
+  --accent: #F97316;
+  --text: #F9FAFB;
+  --muted: #9CA3AF;
+  --disabled: #4B5563;
   --success: #10B981;
+  --error: #EF4444;
 }
 
 * {
@@ -26,40 +29,152 @@ html {
 }
 
 body {
-  font-family: 'Noto Sans TC', 'Space Grotesk', sans-serif;
-  background: var(--primary);
-  color: var(--text-light);
+  font-family: 'Space Grotesk', 'Noto Sans TC', sans-serif;
+  background: var(--bg);
+  color: var(--text);
   line-height: 1.6;
   min-height: 100vh;
 }
 
-.gradient-text {
-  background: linear-gradient(135deg, #6366F1, #F97316);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
-
-.card-hover {
-  transition: transform 0.2s ease, border-color 0.2s ease;
+::-webkit-scrollbar-track {
+  background: var(--bg);
 }
-
-.card-hover:hover {
-  transform: translateY(-4px);
-  border-color: var(--accent);
-}
-
-/* Custom scrollbar for category tabs */
-.scrollbar-thin::-webkit-scrollbar {
-  height: 4px;
-}
-.scrollbar-thin::-webkit-scrollbar-track {
-  background: transparent;
-}
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  background: #3f3f46;
+::-webkit-scrollbar-thumb {
+  background: var(--border);
   border-radius: 9999px;
 }
-.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+::-webkit-scrollbar-thumb:hover {
   background: #52525b;
+}
+
+/* Tool Card System */
+.tool-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  transition: all 150ms ease-out;
+  cursor: pointer;
+  outline: none;
+}
+
+.tool-card:hover {
+  background: var(--surface-2);
+  border-color: rgba(99, 102, 241, 0.5);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 25px -5px rgba(99, 102, 241, 0.12), 0 8px 10px -6px rgba(99, 102, 241, 0.08);
+}
+
+.tool-card:active {
+  transform: scale(0.98);
+  background: var(--surface-2);
+}
+
+.tool-card:focus-visible {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.5);
+}
+
+.tool-card.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.tool-card.disabled:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+/* Panel backdrop */
+.panel-backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+
+/* Panel animation */
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.panel-animate {
+  animation: panelIn 200ms ease-out forwards;
+}
+
+/* Star rating with primary color */
+.star-primary {
+  color: var(--primary);
+}
+.star-accent {
+  color: var(--accent);
+}
+
+/* Category tab */
+.cat-tab {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  transition: all 150ms ease-out;
+}
+
+.cat-tab:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: #6B7280;
+}
+
+.cat-tab.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3);
+}
+
+.cat-tab:focus-visible {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.5);
+  outline: none;
+}
+
+/* Input focus ring */
+.input-glow:focus {
+  border-color: rgba(99, 102, 241, 0.6);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+  outline: none;
+}
+
+/* Skeleton pulse */
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+.skeleton {
+  animation: skeletonPulse 1.5s ease-in-out infinite;
+}
+
+/* Card stagger entrance */
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.card-enter {
+  animation: fadeSlideIn 300ms ease-out forwards;
 }
